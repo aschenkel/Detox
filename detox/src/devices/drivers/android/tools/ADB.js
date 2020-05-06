@@ -7,7 +7,8 @@ const {getAdbPath} = require('../../../../utils/environment');
 const {encodeBase64} = require('../../../../utils/encoding');
 
 class ADB {
-  constructor() {
+  constructor(adbPort) {
+    this.port = adbPort;
     this._cachedApiLevels = new Map();
     this.adbBin = getAdbPath();
   }
@@ -263,11 +264,16 @@ class ADB {
     return this.adbCmd(deviceId, `reverse --remove tcp:${port}`);
   }
 
-  async adbCmd(deviceId, params, options) {
+  // TODO refactor the whole thing so as to make usage of BinaryExec -- similar to EmulatorExec
+  async adbCmd(deviceId, params, options = {}) {
     const serial = `${deviceId ? `-s ${deviceId}` : ''}`;
     const cmd = `"${this.adbBin}" ${serial} ${params}`;
     const retries = _.get(options, 'retries', 1);
     _.unset(options, 'retries');
+
+    if (this.port) {
+      _.set(options, ['env', 'ANDROID_ADB_SERVER_PORT'], this.port);
+    }
 
     return execWithRetriesAndLogs(cmd, options, undefined, retries);
   }

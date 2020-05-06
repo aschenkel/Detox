@@ -2,8 +2,10 @@ const _ = require('lodash');
 const fs = require('fs');
 const path = require('path');
 const ini = require('ini');
+const ADB = require('./tools/ADB');
 const AndroidDriver = require('./AndroidDriver');
 const AVDValidator = require('./emulator/AVDValidator');
+const FreeAdbServerFinder = require('./tools/FreeAdbServerFinder');
 const EmulatorAllocator = require('./emulator/EmulatorAllocator');
 const EmulatorVersionResolver = require('./emulator/EmulatorVersionResolver');
 const { EmulatorExec } = require('./tools/EmulatorExec');
@@ -19,6 +21,7 @@ const argparse = require('../../../utils/argparse');
 const EMU_BIN_STABLE_SKIN_VER = 28;
 
 class EmulatorDriver extends AndroidDriver {
+
   constructor(config) {
     super(config);
 
@@ -26,9 +29,12 @@ class EmulatorDriver extends AndroidDriver {
       lockfilePath: environment.getDeviceLockFilePathAndroid(),
     });
 
-    this._emulatorExec = new EmulatorExec();
-    this._emuVersionResolver = new EmulatorVersionResolver(this._emulatorExec);
-    this._avdValidator = new AVDValidator(this._emulatorExec);
+    super.adb = null;
+    this._emulatorExec = null;
+
+    const genericEmulatorExec = new EmulatorExec();
+    this._emuVersionResolver = new EmulatorVersionResolver(genericEmulatorExec);
+    this._avdValidator = new AVDValidator(genericEmulatorExec);
 
     this._name = 'Unspecified Emulator';
   }
@@ -117,12 +123,32 @@ class EmulatorDriver extends AndroidDriver {
   }
 
   async _allocateDevice(avdName) {
-    const emulatorAllocator = new EmulatorAllocator(avdName, this.adb, this.deviceRegistry, this._emulatorExec);
+    const adbPort = await this._allocateAdbPort();
+    super.adb = new ADB(adbPort); // TODO this._adb ?
+    this._emulatorExec = new EmulatorExec(adbPort);
 
-    const adbName = await this.deviceRegistry.allocateDevice(() => emulatorAllocator.allocate());
+    const emulatorAllocator = new EmulatorAllocator(avdName, this.adb, this._emulatorExec);
+    const adbName = await emulatorAllocator.allocate();
+
+    // TODO temp, just for testing - must not be merged
+    if (emulatorAllocator.coldBooted) {
+      const sleep = require('../../../utils/sleep');
+      await sleep(15000);
+    }
+
     await this._waitForDevice(adbName);
     await this.emitter.emit('bootDevice', { coldBoot: emulatorAllocator.coldBooted, deviceId: adbName, type: adbName });
     return adbName;
+  }
+
+  async _allocateAdbPort() {
+    const freeAdbServerFinder = new FreeAdbServerFinder(this.deviceRegistry);
+
+    const adbPort = await this.deviceRegistry.allocateDevice(() => freeAdbServerFinder.findFreeAdbServer());
+    if (!adbPort) {
+      throw new DetoxRuntimeError({ message: 'Ran out of available ports for ADB servers!' });
+    }
+    return adbPort;
   }
 
   async _waitForDevice(deviceId) {
